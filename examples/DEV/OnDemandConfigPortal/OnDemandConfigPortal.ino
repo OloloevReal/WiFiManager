@@ -5,6 +5,14 @@
  */
 #include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
 #include <time.h>
+#include <stdio.h>
+
+#define USEOTA
+// enable OTA
+#ifdef USEOTA
+#include <WiFiUdp.h>
+#include <ArduinoOTA.h>
+#endif
 
 #define TRIGGER_PIN 0
 const char* modes[] = { "NULL", "STA", "AP", "STA+AP" };
@@ -60,10 +68,14 @@ void print_oled(String str,uint8_t size){
 }
 
 WiFiManager wm;
-bool TEST_CP  = false; // always start the configportal
-bool TEST_NET = true; // do a network test, get ntp time
-char ssid[] = "*************";  //  your network SSID (name)
-char pass[] = "********";       // your network password
+
+// OPTION FLAGS
+bool TEST_CP  = true; // always start the configportal, even if ap found
+bool TEST_NET = true; // do a network test after connect, (gets ntp time)
+bool ALLOWONDEMAND = true;
+
+// char ssid[] = "*************";  //  your network SSID (name)
+// char pass[] = "********";       // your network password
 
 void saveWifiCallback(){
   Serial.println("[CALLBACK] saveCallback fired");
@@ -100,8 +112,12 @@ void setup() {
   WiFi.mode(WIFI_STA); // explicitly set mode, esp defaults to STA+AP
   // put your setup code here, to run once:
   Serial.begin(115200);
+  // Serial1.begin(115200);
+
   // Serial.setDebugOutput(true);  
-  // delay(3000);
+  delay(1000);
+  // Serial1.println("TXD1 Enabled");
+
   Serial.println("\n Starting");
   // WiFi.setSleepMode(WIFI_NONE_SLEEP); // disable sleep, can improve ap stability
   
@@ -117,13 +133,6 @@ void setup() {
   // wm.erase();
   
   wm.setClass("invert");
-
-  //sets timeout until configuration portal gets turned off
-  //useful to make it all retry or go to sleep
-  //in seconds
-  // wm.setConfigPortalTimeout(600);
-  // wm.setConnectTimeout(5);
-  // wm.setShowStaticFields(true);
 
   WiFiManagerParameter custom_html("<p>This Is Custom HTML</p>"); // only custom html
   WiFiManagerParameter custom_mqtt_server("server", "mqtt server", "", 40);
@@ -158,8 +167,10 @@ void setup() {
   // wm.setMenu(menu,9); // custom menu array must provide length
 
   std::vector<const char *> menu = {"wifi","wifinoscan","info","param","close","sep","erase","restart","exit"};
-  wm.setMenu(menu); // custom menu, pass vector
+  // wm.setMenu(menu); // custom menu, pass vector
   
+  // wm.setParamsPage(true); // move params to seperate page, not wifi, do not combine with setmenu!
+
   // set static sta ip
   // wm.setSTAStaticIPConfig(IPAddress(10,0,1,99), IPAddress(10,0,1,1), IPAddress(255,255,255,0));
   // wm.setShowStaticFields(false);
@@ -173,19 +184,34 @@ void setup() {
   wm.setCountry("US"); // setting wifi country seems to improve OSX soft ap connectivity, may help others as well
   
   // set channel
-  wm.setWiFiAPChannel(13);
+  // wm.setWiFiAPChannel(13);
   
-  // set configrportal timeout
-  wm.setConfigPortalTimeout(120);
+  // set AP hidden
+  // wm.setAPHidden(true);
+
+  // show password publicly!
+  // wm.setShowPassword(true);
+
+  //sets timeout until configuration portal gets turned off
+  //useful to make it all retry or go to sleep in seconds
+    wm.setConfigPortalTimeout(120);
+  
+  // wm.setConnectTimeout(20);
+  // wm.setShowStaticFields(true);
+  
   // wm.startConfigPortal("AutoConnectAP", "password");
+  
+  // wm.setCleanConnect(true); // disconenct before connect, clean connect
+  
+  wm.setBreakAfterConfig(true);
 
   //fetches ssid and pass and tries to connect
   //if it does not connect it starts an access point with the specified name
   //here  "AutoConnectAP"
   //and goes into a blocking loop awaiting configuration
-  
+  wifiInfo();
   print_oled(F("Connecting..."),2);  
-  if(!wm.autoConnect("AutoConnectAP")) {
+  if(!wm.autoConnect("WM_AutoConnectAP","12345678")) {
     Serial.println("failed to connect and hit timeout");
     print_oled("Not Connected",2);
   }
@@ -194,23 +220,41 @@ void setup() {
     Serial.println("TEST_CP ENABLED");
     // start configportal always
     wm.setConfigPortalTimeout(60);
-    wm.startConfigPortal();
+    wm.startConfigPortal("WM_ConnectAP");
   }
   else {
     //if you get here you have connected to the WiFi
      Serial.println("connected...yeey :)");
       print_oled("Connected\nIP: " + WiFi.localIP().toString() + "\nSSID: " + WiFi.SSID(),1);    
   }
-  pinMode(TRIGGER_PIN, INPUT);
+  
+  wifiInfo();
+  pinMode(TRIGGER_PIN, INPUT_PULLUP);
+
+  #ifdef USEOTA
+    ArduinoOTA.begin();
+  #endif
+}
+
+void wifiInfo(){
+  WiFi.printDiag(Serial);
+  Serial.println("SAVED: " + (String)wm.getWiFiIsSaved() ? "YES" : "NO");
+  Serial.println("SSID: " + (String)wm.getWiFiSSID());
+  Serial.println("PASS: " + (String)wm.getWiFiPass());
 }
 
 void loop() {
+
+  #ifdef USEOTA
+  ArduinoOTA.handle();
+  #endif
   // is configuration portal requested?
-  if ( digitalRead(TRIGGER_PIN) == LOW ) {
+  if (ALLOWONDEMAND && digitalRead(TRIGGER_PIN) == LOW ) {
     delay(100);
     if ( digitalRead(TRIGGER_PIN) == LOW ){
       Serial.println("BUTTON PRESSED");
       wm.setConfigPortalTimeout(140);
+      wm.setParamsPage(false); // move params to seperate page, not wifi, do not combine with setmenu!
 
       // disable captive portal redirection
       // wm.setCaptivePortalEnable(false);
